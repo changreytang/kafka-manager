@@ -18,6 +18,8 @@ assemblyMergeStrategy in assembly := {
   case other => (assemblyMergeStrategy in assembly).value(other)
 }
 
+val myRepo = "Groupon Maven Repo" at "http://nexus-dev/content/groups/public"
+
 libraryDependencies ++= Seq(
   "com.typesafe.akka" %% "akka-actor" % "2.3.14",
   "com.typesafe.akka" %% "akka-slf4j" % "2.3.14",
@@ -40,6 +42,8 @@ libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "2.2.1" % "test",
   "org.apache.curator" % "curator-test" % "2.10.0" % "test",
   "org.mockito" % "mockito-core" % "1.10.19" % "test",
+  "com.groupon.dse" % "kafka-message-serde" % "1.8",
+  "com.fasterxml.jackson.core" % "jackson-core" % "2.9.0",
   "com.yammer.metrics" % "metrics-core" % "2.2.0" force()
 )
 

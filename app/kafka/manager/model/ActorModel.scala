@@ -5,19 +5,37 @@
 
 package kafka.manager.model
 
+import java.util
 import java.util.Properties
 
+import org.apache.kafka.clients.consumer.{ConsumerRecord, ConsumerRecords, KafkaConsumer}
 import grizzled.slf4j.Logging
 import kafka.common.TopicAndPartition
 import kafka.manager.jmx._
 import kafka.manager.utils
 import kafka.manager.utils.zero81.ForceReassignmentCommand
+import org.apache.kafka.common.TopicPartition
 import org.joda.time.DateTime
 
 import scala.collection.immutable.Queue
+import scala.collection.mutable.ArrayBuffer
 import scala.concurrent.{Await, Future}
 import scala.util.{Failure, Success, Try}
+import scala.util.control.Breaks._
 import scalaz.{NonEmptyList, Validation}
+
+import com.groupon.kafka.serde.LoggernautEvent
+import com.groupon.kafka.serde.decoder.JanusParser
+import com.groupon.kafka.serde.decoder.MetricsCollector
+import com.groupon.kafka.serde.decoder.Parser
+import com.groupon.kafka.serde.decoder.ParserException
+import com.groupon.kafka.serde.decoder.ParserFactory
+
+import com.fasterxml.jackson.databind.ObjectMapper
+
+
+import play.api.Play
+
 
 /**
  * @author hiral
@@ -293,7 +311,7 @@ object ActorModel {
     import org.json4s.jackson.JsonMethods._
     import org.json4s.scalaz.JsonScalaz._
 
-import scala.language.reflectiveCalls
+    import scala.language.reflectiveCalls
     import scalaz.syntax.applicative._
 
     implicit def from(partition: Int,
@@ -364,7 +382,8 @@ import scala.language.reflectiveCalls
                            config: List[(String,String)],
                            clusterContext: ClusterContext,
                            metrics: Option[BrokerMetrics] = None,
-                           size: Option[String] = None) {
+                           size: Option[String] = None,
+                           consumer: KafkaConsumer[Array[Byte], Array[Byte]] = null) extends Logging {
 
     val replicationFactor : Int = partitionsIdentity.head._2.replicas.size
 
@@ -417,6 +436,135 @@ import scala.language.reflectiveCalls
     }
 
     val producerRate: String = BigDecimal(partitionsIdentity.map(_._2.rateOfChange.getOrElse(0D)).sum).setScale(2, BigDecimal.RoundingMode.HALF_UP).toString()
+
+    val sampleData: String = {
+      if (consumer != null) {
+        val decoderConfig: Properties = {
+          val filePath = Play.current.configuration.getString("sample-data.consumer.decoder.properties.file").getOrElse("conf/decoder.properties")
+          val file = new java.io.File(filePath)
+          val props = new Properties()
+          if(file.isFile & file.canRead) {
+            props.load(new java.io.FileInputStream(file))
+          } else {
+            logger.info(s"Failed to find consumer properties file or file is not readable : $file")
+          }
+          logger.info(props.toString)
+          props
+        }
+        var sampleData: String = ""
+
+        var partitionList = new ArrayBuffer[TopicPartition]()
+        var partNum = 0
+        for (partNum <- 0 until partitions) {
+          partitionList += new TopicPartition(topic, partNum)
+        }
+
+        val rawParser = ParserFactory.getRawParser
+
+        val loggernautMetaBool = java.lang.Boolean.valueOf(decoderConfig.getProperty("loggernaut.meta"))
+        val loggernautParser = ParserFactory.getLoggernautParser(loggernautMetaBool)
+        val uatJanusParser = ParserFactory.getJanusParser(JanusParser.UAT_URL)
+        val stagingJanusParser = ParserFactory.getJanusParser(JanusParser.STAGING_URL)
+        val prodJanusParser = ParserFactory.getJanusParser(JanusParser.PRODUCTION_URL)
+
+        var partition: TopicPartition = null
+        var rawBool = true
+        var numPartitionsCheck = 5 // put in decoder.properties
+
+        breakable {
+          try {
+            for (partition <- partitionList) {
+              numPartitionsCheck -= 1
+              if (numPartitionsCheck < 0) break
+              consumer.assign(util.Arrays.asList(partition))
+              var offset = consumer.position(partition) - 10
+              if (offset < 0) offset = 0
+              consumer.seek(partition, offset)
+              logger.info("Consumer checking partition " + partition.toString + " with offset " + offset)
+              val records = consumer.poll(500) // put in decoder.properties
+              var latest: ConsumerRecord[Array[Byte], Array[Byte]] = null
+              var msgs: java.util.List[Object] = null
+              val consumerIt = records.iterator()
+              while (consumerIt.hasNext) {
+                latest = consumerIt.next()
+                /** TODO: Wrap in SPI with generic method call Decoder.decode(latest, decoderConfigs) */
+                try {
+                  msgs = loggernautParser.getMessageList(latest.value())
+                  logger.info("Try to decode with loggernaut")
+                  if (loggernautMetaBool) rawBool = false
+                } catch {
+                  case e: Exception => {
+                    try {
+                      msgs = prodJanusParser.getMessageList(latest.value())
+                      logger.info("Try to decode with production Janus parser")
+                    } catch {
+                      case e: Exception => {
+                        try {
+                          msgs = stagingJanusParser.getMessageList(latest.value())
+                          logger.info("Try to decode with staging Janus parser")
+                        } catch {
+                          case e: Exception => {
+                            try {
+                              msgs = uatJanusParser.getMessageList(latest.value())
+                              logger.info("Try to decode with UAT Janus parser")
+                            } catch {
+                              case e: Exception => {
+                                try {
+                                  msgs = rawParser.getMessageList(latest.value())
+                                  logger.info("Try to decode with raw parser")
+                                } catch {
+                                  case e: Exception => {
+                                    try {
+                                      sampleData = new String(latest.value())
+                                      logger.info("Try to string-ify raw bytes")
+                                      break
+                                    } catch {
+                                      case e: Exception => {
+                                        sampleData = ""
+                                        break
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+                var msg: Object = null
+                val msgIt = msgs.iterator()
+                while (msgIt.hasNext) {
+                  if (rawBool == true) {
+                    sampleData += msgIt.next().toString
+                  } else {
+                    sampleData += msgIt.next().asInstanceOf[LoggernautEvent].toJsonString(!loggernautMetaBool, false)
+                  }
+                }
+                break
+              }
+            }
+          } catch {
+            case e: Exception => sampleData = "Cannot Retrieve"
+          }
+        }
+        if (rawBool != true) {
+          try {
+            val mapper = new ObjectMapper()
+            val json = mapper.readValue(sampleData, classOf[Object])
+            sampleData = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(json)
+          } catch {
+            case e: Exception => logger.info("Couldn't pretty print JSON")
+          }
+        }
+        logger.info("value: " + sampleData)
+        sampleData
+      } else {
+        "Cannot Retrieve"
+      }
+    }
   }
 
   object TopicIdentity extends Logging {
@@ -467,7 +615,8 @@ import scala.language.reflectiveCalls
     private[this] def getTopicPartitionIdentity(td: TopicDescription,
                                                 partMap: Map[String, List[Int]],
                                                 tdPrevious: Option[TopicDescription],
-                                                tpSizes: Map[Int, Map[Int, Long]]) : Map[Int, TopicPartitionIdentity] = {
+                                                tpSizes: Map[Int, Map[Int, Long]],
+                                                consumer: KafkaConsumer[Array[Byte], Array[Byte]] = null) : Map[Int, TopicPartitionIdentity] = {
 
       val stateMap = td.partitionState.getOrElse(Map.empty)
       // Assign the partition data to the TPI format
@@ -527,10 +676,33 @@ import scala.language.reflectiveCalls
                       td: TopicDescription,
                       tm: Option[BrokerMetrics],
                       tpSizes: Option[Map[Int, Map[Int, Long]]],
-                      clusterContext: ClusterContext, tdPrevious: Option[TopicDescription]) : TopicIdentity = {
-      // Get the topic description information
+                      clusterContext: ClusterContext, tdPrevious: Option[TopicDescription],
+                      brokerList: BrokerList = null) : TopicIdentity = {
+      val consumer : KafkaConsumer[Array[Byte], Array[Byte]] = {
+        if (brokerList == null) {
+          null
+        } else {
+          val props = new Properties
+          logger.info(brokerList.toString)
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG, "kafka-manager")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList.list.map(bi => s"${bi.host}:${bi.port}").mkString(","))
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG, "false")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
+          logger.info("Creating sample-data consumer with: " + props.toString)
+
+          var konsumer: KafkaConsumer[Array[Byte], Array[Byte]] = null
+          try {
+            konsumer = new KafkaConsumer[Array[Byte], Array[Byte]](props)
+          } catch {
+            case e: Exception => logger.info("Couldn't create sample-data consumer")
+          }
+          konsumer
+        }
+      }
       val partMap = getPartitionReplicaMap(td)
-      val tpi : Map[Int,TopicPartitionIdentity] = getTopicPartitionIdentity(td, partMap, tdPrevious, tpSizes.getOrElse(Map.empty))
+      val tpi : Map[Int,TopicPartitionIdentity] = getTopicPartitionIdentity(td, partMap, tdPrevious, tpSizes.getOrElse(Map.empty), consumer)
       val config : (Int,Map[String, String]) = {
         try {
           val resultOption: Option[(Int,Map[String, String])] = td.config.map { configString =>
@@ -549,11 +721,11 @@ import scala.language.reflectiveCalls
         }
       }
       val size = tpi.flatMap(_._2.leaderSize).reduceLeftOption{ _ + _ }.map(FormatMetric.sizeFormat(_))
-      TopicIdentity(td.topic,td.description._1,partMap.size,tpi,brokers,config._1,config._2.toList, clusterContext, tm, size)
+      TopicIdentity(td.topic,td.description._1,partMap.size,tpi,brokers,config._1,config._2.toList, clusterContext, tm, size, consumer)
     }
 
     implicit def from(bl: BrokerList, td: TopicDescription, tm: Option[BrokerMetrics], tpSizes: Option[Map[Int, Map[Int, Long]]], clusterContext: ClusterContext, tdPrevious: Option[TopicDescription]) : TopicIdentity = {
-      from(bl.list.size, td, tm, tpSizes, clusterContext, tdPrevious)
+      from(bl.list.size, td, tm, tpSizes, clusterContext, tdPrevious, bl)
     }
 
     implicit def reassignReplicas(currentTopicIdentity: TopicIdentity,

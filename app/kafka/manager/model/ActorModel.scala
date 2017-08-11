@@ -446,76 +446,94 @@ object ActorModel {
           if(file.isFile & file.canRead) {
             props.load(new java.io.FileInputStream(file))
           } else {
-            logger.info(s"Failed to find consumer properties file or file is not readable : $file")
+            logger.info(s"Failed to find decoder properties file or file is not readable : $file")
           }
           logger.info(props.toString)
           props
         }
-        var sampleData: String = ""
+        // Pull all configs from the decoder.properties file
+        val loggernautMetaBool = java.lang.Boolean.valueOf(decoderConfig.getProperty("loggernaut.meta"))
+        var numPartitionsCheck = java.lang.Integer.valueOf(decoderConfig.getProperty("sample-data.consumer.partitions.peek"))
+        logger.info("numPartitionsCheck=" + numPartitionsCheck.toString)
+        val pollTimeout = java.lang.Long.valueOf(decoderConfig.getProperty("sample-data.consumer.poll.timeout"))
+        logger.info("pollTimeout=" + pollTimeout.toString)
 
+        // Initialize all partitions in the topic that we might peek data from
         var partitionList = new ArrayBuffer[TopicPartition]()
         var partNum = 0
         for (partNum <- 0 until partitions) {
           partitionList += new TopicPartition(topic, partNum)
         }
 
+        // Initialize all kafka-message-serde parsers
         val rawParser = ParserFactory.getRawParser
-
-        val loggernautMetaBool = java.lang.Boolean.valueOf(decoderConfig.getProperty("loggernaut.meta"))
         val loggernautParser = ParserFactory.getLoggernautParser(loggernautMetaBool)
-        val uatJanusParser = ParserFactory.getJanusParser(JanusParser.UAT_URL)
-        val stagingJanusParser = ParserFactory.getJanusParser(JanusParser.STAGING_URL)
         val prodJanusParser = ParserFactory.getJanusParser(JanusParser.PRODUCTION_URL)
+        val stagingJanusParser = ParserFactory.getJanusParser(JanusParser.STAGING_URL)
+        val uatJanusParser = ParserFactory.getJanusParser(JanusParser.UAT_URL)
 
         var partition: TopicPartition = null
         var rawBool = true
-        var numPartitionsCheck = 5 // put in decoder.properties
+        var sampleData: String = ""
 
         breakable {
           try {
+            // Loop through each partition and attempt to extract data
             for (partition <- partitionList) {
+              // Make sure to only check the number of partitions defined in decoder.properties
               numPartitionsCheck -= 1
+              logger.info(numPartitionsCheck.toString)
               if (numPartitionsCheck < 0) break
+
+              // Assign consumer to each consecutive partition and retrieve last message offset
               consumer.assign(util.Arrays.asList(partition))
-              var offset = consumer.position(partition) - 10
+              var offset = consumer.position(partition) - 1
               if (offset < 0) offset = 0
               consumer.seek(partition, offset)
+
               logger.info("Consumer checking partition " + partition.toString + " with offset " + offset)
-              val records = consumer.poll(500) // put in decoder.properties
+              val records = consumer.poll(pollTimeout)
               var latest: ConsumerRecord[Array[Byte], Array[Byte]] = null
               var msgs: java.util.List[Object] = null
               val consumerIt = records.iterator()
               while (consumerIt.hasNext) {
                 latest = consumerIt.next()
-                /** TODO: Wrap in SPI with generic method call Decoder.decode(latest, decoderConfigs) */
+                val latestVal = latest.value()
+                /**
+                  * TODO: Wrap in SPI with generic method call Decoder.decode(latest, decoderConfigs)
+                  * UPDATE: Research shows that this is not possible with the Play framework
+                  *
+                  * TODO: Might be better way to do this than with try/catch "flow control"
+                  */
+                // Attempt to decode the message with different formats
                 try {
-                  msgs = loggernautParser.getMessageList(latest.value())
-                  logger.info("Try to decode with loggernaut")
+                  msgs = loggernautParser.getMessageList(latestVal)
+                  logger.info("Try to decode with loggernaut parser")
                   if (loggernautMetaBool) rawBool = false
                 } catch {
                   case e: Exception => {
                     try {
-                      msgs = prodJanusParser.getMessageList(latest.value())
+                      msgs = prodJanusParser.getMessageList(latestVal)
                       logger.info("Try to decode with production Janus parser")
                     } catch {
                       case e: Exception => {
                         try {
-                          msgs = stagingJanusParser.getMessageList(latest.value())
+                          msgs = stagingJanusParser.getMessageList(latestVal)
                           logger.info("Try to decode with staging Janus parser")
                         } catch {
                           case e: Exception => {
                             try {
-                              msgs = uatJanusParser.getMessageList(latest.value())
+                              msgs = uatJanusParser.getMessageList(latestVal)
                               logger.info("Try to decode with UAT Janus parser")
                             } catch {
                               case e: Exception => {
                                 try {
-                                  msgs = rawParser.getMessageList(latest.value())
+                                  msgs = rawParser.getMessageList(latestVal)
                                   logger.info("Try to decode with raw parser")
                                 } catch {
                                   case e: Exception => {
                                     try {
-                                      sampleData = new String(latest.value())
+                                      sampleData = new String(latestVal)
                                       logger.info("Try to string-ify raw bytes")
                                       break
                                     } catch {
@@ -550,7 +568,8 @@ object ActorModel {
             case e: Exception => sampleData = "Cannot Retrieve"
           }
         }
-        if (rawBool != true) {
+        if (!rawBool) {
+          // Try to pretty-print as JSON object if possible
           try {
             val mapper = new ObjectMapper()
             val json = mapper.readValue(sampleData, classOf[Object])

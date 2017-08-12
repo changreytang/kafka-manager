@@ -26,14 +26,9 @@ import scalaz.{NonEmptyList, Validation}
 
 import com.groupon.kafka.serde.LoggernautEvent
 import com.groupon.kafka.serde.decoder.JanusParser
-import com.groupon.kafka.serde.decoder.MetricsCollector
-import com.groupon.kafka.serde.decoder.Parser
-import com.groupon.kafka.serde.decoder.ParserException
 import com.groupon.kafka.serde.decoder.ParserFactory
 
 import com.fasterxml.jackson.databind.ObjectMapper
-
-
 import play.api.Play
 
 
@@ -448,15 +443,12 @@ object ActorModel {
           } else {
             logger.info(s"Failed to find decoder properties file or file is not readable : $file")
           }
-          logger.info(props.toString)
           props
         }
         // Pull all configs from the decoder.properties file
         val loggernautMetaBool = java.lang.Boolean.valueOf(decoderConfig.getProperty("loggernaut.meta"))
         var numPartitionsCheck = java.lang.Integer.valueOf(decoderConfig.getProperty("sample-data.consumer.partitions.peek"))
-        logger.info("numPartitionsCheck=" + numPartitionsCheck.toString)
         val pollTimeout = java.lang.Long.valueOf(decoderConfig.getProperty("sample-data.consumer.poll.timeout"))
-        logger.info("pollTimeout=" + pollTimeout.toString)
 
         // Initialize all partitions in the topic that we might peek data from
         var partitionList = new ArrayBuffer[TopicPartition]()
@@ -482,7 +474,6 @@ object ActorModel {
             for (partition <- partitionList) {
               // Make sure to only check the number of partitions defined in decoder.properties
               numPartitionsCheck -= 1
-              logger.info(numPartitionsCheck.toString)
               if (numPartitionsCheck < 0) break
 
               // Assign consumer to each consecutive partition and retrieve last message offset
@@ -491,7 +482,6 @@ object ActorModel {
               if (offset < 0) offset = 0
               consumer.seek(partition, offset)
 
-              logger.info("Consumer checking partition " + partition.toString + " with offset " + offset)
               val records = consumer.poll(pollTimeout)
               var latest: ConsumerRecord[Array[Byte], Array[Byte]] = null
               var msgs: java.util.List[Object] = null
@@ -578,7 +568,6 @@ object ActorModel {
             case e: Exception => logger.info("Couldn't pretty print JSON")
           }
         }
-        logger.info("value: " + sampleData)
         sampleData
       } else {
         "Cannot Retrieve"
@@ -702,14 +691,12 @@ object ActorModel {
           null
         } else {
           val props = new Properties
-          logger.info(brokerList.toString)
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.GROUP_ID_CONFIG, "kafka-manager")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, brokerList.list.map(bi => s"${bi.host}:${bi.port}").mkString(","))
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
-          logger.info("Creating sample-data consumer with: " + props.toString)
 
           var konsumer: KafkaConsumer[Array[Byte], Array[Byte]] = null
           try {

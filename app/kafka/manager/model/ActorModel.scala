@@ -446,7 +446,6 @@ object ActorModel {
           props
         }
         // Pull all configs from the decoder.properties file
-        val loggernautMetaBool = java.lang.Boolean.valueOf(decoderConfig.getProperty("loggernaut.meta"))
         var numPartitionsCheck = java.lang.Integer.valueOf(decoderConfig.getProperty("sample-data.consumer.partitions.peek"))
         val pollTimeout = java.lang.Long.valueOf(decoderConfig.getProperty("sample-data.consumer.poll.timeout"))
 
@@ -457,115 +456,31 @@ object ActorModel {
           partitionList += new TopicPartition(topic, partNum)
         }
 
-        // Initialize all kafka-message-serde parsers
-        val rawParser = ParserFactory.getRawParser
-        val loggernautParser = ParserFactory.getLoggernautParser(loggernautMetaBool)
-        val prodJanusParser = ParserFactory.getJanusParser(JanusParser.PRODUCTION_URL)
-        val stagingJanusParser = ParserFactory.getJanusParser(JanusParser.STAGING_URL)
-        val uatJanusParser = ParserFactory.getJanusParser(JanusParser.UAT_URL)
-
         var partition: TopicPartition = null
-        var rawBool = true
         var sampleData: String = ""
 
+        // Loop through each partition and attempt to extract data
         breakable {
-          try {
-            // Loop through each partition and attempt to extract data
-            for (partition <- partitionList) {
-              // Make sure to only check the number of partitions defined in decoder.properties
-              numPartitionsCheck -= 1
-              if (numPartitionsCheck < 0) break
+          for (partition <- partitionList) {
+            // Make sure to only check the number of partitions defined in decoder.properties
+            numPartitionsCheck -= 1
+            if (numPartitionsCheck < 0) break
 
-              // Assign consumer to each consecutive partition and retrieve last message offset
-              consumer.assign(util.Arrays.asList(partition))
-              var offset = consumer.position(partition) - 1
-              if (offset < 0) offset = 0
-              consumer.seek(partition, offset)
+            // Assign consumer to each consecutive partition and retrieve last message offset
+            consumer.assign(util.Arrays.asList(partition))
+            var offset = consumer.position(partition) - 1
+            if (offset < 0) offset = 0
+            consumer.seek(partition, offset)
 
-              val records = consumer.poll(pollTimeout)
-              var latest: ConsumerRecord[Array[Byte], Array[Byte]] = null
-              var msgs: java.util.List[Object] = null
-              val consumerIt = records.iterator()
-              while (consumerIt.hasNext) {
-                latest = consumerIt.next()
-                val latestVal = latest.value()
-                /**
-                  * TODO: Wrap in SPI with generic method call Decoder.decode(latest, decoderConfigs)
-                  * UPDATE: Research shows that this is not possible with the Play framework
-                  *
-                  * TODO: Might be better way to do this than with try/catch "flow control"
-                  */
-                // Attempt to decode the message with different formats
-                try {
-                  msgs = loggernautParser.getMessageList(latestVal)
-                  logger.info("Try to decode with loggernaut parser")
-                  if (loggernautMetaBool) rawBool = false
-                } catch {
-                  case e: Exception => {
-                    try {
-                      msgs = prodJanusParser.getMessageList(latestVal)
-                      logger.info("Try to decode with production Janus parser")
-                    } catch {
-                      case e: Exception => {
-                        try {
-                          msgs = stagingJanusParser.getMessageList(latestVal)
-                          logger.info("Try to decode with staging Janus parser")
-                        } catch {
-                          case e: Exception => {
-                            try {
-                              msgs = uatJanusParser.getMessageList(latestVal)
-                              logger.info("Try to decode with UAT Janus parser")
-                            } catch {
-                              case e: Exception => {
-                                try {
-                                  msgs = rawParser.getMessageList(latestVal)
-                                  logger.info("Try to decode with raw parser")
-                                } catch {
-                                  case e: Exception => {
-                                    try {
-                                      sampleData = new String(latestVal)
-                                      logger.info("Try to string-ify raw bytes")
-                                      break
-                                    } catch {
-                                      case e: Exception => {
-                                        sampleData = ""
-                                        break
-                                      }
-                                    }
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    }
-                  }
-                }
-                var msg: Object = null
-                val msgIt = msgs.iterator()
-                while (msgIt.hasNext) {
-                  if (rawBool == true) {
-                    sampleData += msgIt.next().toString
-                  } else {
-                    sampleData += msgIt.next().asInstanceOf[LoggernautEvent].toJsonString(!loggernautMetaBool, false)
-                  }
-                }
-                break
-              }
+            val records = consumer.poll(pollTimeout)
+            var latest: ConsumerRecord[Array[Byte], Array[Byte]] = null
+            val consumerIt = records.iterator()
+
+            while (consumerIt.hasNext) {
+              latest = consumerIt.next()
+              sampleData = new String(latest.value())
+              break
             }
-          } catch {
-            case e: Exception => sampleData = "Cannot Retrieve"
-          }
-        }
-        if (!rawBool) {
-          // Try to pretty-print as JSON object if possible
-          try {
-            val mapper = new ObjectMapper()
-            val json = mapper.readValue(sampleData, classOf[Object])
-            sampleData = mapper.writerWithDefaultPrettyPrinter().writeValueAsString(json)
-          } catch {
-            case e: Exception => logger.info("Couldn't pretty print JSON")
           }
         }
         sampleData
@@ -696,7 +611,8 @@ object ActorModel {
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
-          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "kafka.manager.deserializer.KafkaMessageSerdeDeserializer")
+          props.put(kafka.manager.deserializer.KafkaMessageSerdeDeserializer.CONFIG_VALUE_LOGGERNAUT_META, "true")
 
           var konsumer: KafkaConsumer[Array[Byte], Array[Byte]] = null
           try {

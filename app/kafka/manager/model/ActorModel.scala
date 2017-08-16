@@ -611,8 +611,7 @@ object ActorModel {
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
-          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "kafka.manager.deserializer.KafkaMessageSerdeDeserializer")
-          props.put(kafka.manager.deserializer.KafkaMessageSerdeDeserializer.CONFIG_VALUE_LOGGERNAUT_META, "true")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "kafka.manager.deserializer.JSONDeserializer")
 
           var konsumer: KafkaConsumer[Array[Byte], Array[Byte]] = null
           try {

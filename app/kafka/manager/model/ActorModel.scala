@@ -435,7 +435,7 @@ object ActorModel {
 
     val sampleData: String = {
       if (consumer != null) {
-        // Pull all configs from the decoder.properties file
+        // Pull all configs from the sample-data.properties file
         var numPartitionsCheck = java.lang.Integer.valueOf(decoderConfig.getProperty("sample-data.consumer.partitions.peek"))
         val pollTimeout = java.lang.Long.valueOf(decoderConfig.getProperty("sample-data.consumer.poll.timeout"))
 
@@ -452,7 +452,7 @@ object ActorModel {
         // Loop through each partition and attempt to extract data
         breakable {
           for (partition <- partitionList) {
-            // Make sure to only check the number of partitions defined in decoder.properties
+            // Make sure to only check the number of partitions defined in sample-data.properties
             numPartitionsCheck -= 1
             if (numPartitionsCheck < 0) break
 
@@ -592,7 +592,7 @@ object ActorModel {
                       clusterContext: ClusterContext, tdPrevious: Option[TopicDescription],
                       brokerList: BrokerList = null) : TopicIdentity = {
       val decoderConfig: Properties = {
-        val filePath = Play.current.configuration.getString("sample-data.consumer.decoder.properties.file").getOrElse("conf/decoder.properties")
+        val filePath = Play.current.configuration.getString("sample-data.consumer.properties.file").getOrElse("conf/sample-data.properties")
         val file = new java.io.File(filePath)
         val props = new Properties()
         if(file.isFile & file.canRead) {

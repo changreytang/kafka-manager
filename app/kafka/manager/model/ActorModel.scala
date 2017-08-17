@@ -528,8 +528,7 @@ object ActorModel {
     private[this] def getTopicPartitionIdentity(td: TopicDescription,
                                                 partMap: Map[String, List[Int]],
                                                 tdPrevious: Option[TopicDescription],
-                                                tpSizes: Map[Int, Map[Int, Long]],
-                                                consumer: KafkaConsumer[Array[Byte], Array[Byte]] = null) : Map[Int, TopicPartitionIdentity] = {
+                                                tpSizes: Map[Int, Map[Int, Long]]) : Map[Int, TopicPartitionIdentity] = {
 
       val stateMap = td.partitionState.getOrElse(Map.empty)
       // Assign the partition data to the TPI format
@@ -625,7 +624,7 @@ object ActorModel {
         }
       }
       val partMap = getPartitionReplicaMap(td)
-      val tpi : Map[Int,TopicPartitionIdentity] = getTopicPartitionIdentity(td, partMap, tdPrevious, tpSizes.getOrElse(Map.empty), consumer)
+      val tpi : Map[Int,TopicPartitionIdentity] = getTopicPartitionIdentity(td, partMap, tdPrevious, tpSizes.getOrElse(Map.empty))
       val config : (Int,Map[String, String]) = {
         try {
           val resultOption: Option[(Int,Map[String, String])] = td.config.map { configString =>

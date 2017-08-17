@@ -40,8 +40,9 @@ libraryDependencies ++= Seq(
   "org.scalatest" %% "scalatest" % "2.2.1" % "test",
   "org.apache.curator" % "curator-test" % "2.10.0" % "test",
   "org.mockito" % "mockito-core" % "1.10.19" % "test",
-  "com.groupon.dse" % "kafka-message-serde" % "1.8",
   "com.fasterxml.jackson.core" % "jackson-core" % "2.9.0",
+  "com.fasterxml.jackson.core" % "jackson-annotations" % "2.9.0",
+  "com.fasterxml.jackson.core" % "jackson-databind" % "2.9.0",
   "com.yammer.metrics" % "metrics-core" % "2.2.0" force()
 )
 

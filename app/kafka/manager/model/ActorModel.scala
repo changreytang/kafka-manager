@@ -24,11 +24,6 @@ import scala.util.{Failure, Success, Try}
 import scala.util.control.Breaks._
 import scalaz.{NonEmptyList, Validation}
 
-import com.groupon.kafka.serde.LoggernautEvent
-import com.groupon.kafka.serde.decoder.JanusParser
-import com.groupon.kafka.serde.decoder.ParserFactory
-
-import com.fasterxml.jackson.databind.ObjectMapper
 import play.api.Play
 
 

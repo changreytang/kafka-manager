@@ -378,7 +378,8 @@ object ActorModel {
                            clusterContext: ClusterContext,
                            metrics: Option[BrokerMetrics] = None,
                            size: Option[String] = None,
-                           consumer: KafkaConsumer[Array[Byte], Array[Byte]] = null) extends Logging {
+                           consumer: KafkaConsumer[Array[Byte], Array[Byte]] = null,
+                           decoderConfig: Properties = null) extends Logging {
 
     val replicationFactor : Int = partitionsIdentity.head._2.replicas.size
 
@@ -434,17 +435,6 @@ object ActorModel {
 
     val sampleData: String = {
       if (consumer != null) {
-        val decoderConfig: Properties = {
-          val filePath = Play.current.configuration.getString("sample-data.consumer.decoder.properties.file").getOrElse("conf/decoder.properties")
-          val file = new java.io.File(filePath)
-          val props = new Properties()
-          if(file.isFile & file.canRead) {
-            props.load(new java.io.FileInputStream(file))
-          } else {
-            logger.info(s"Failed to find decoder properties file or file is not readable : $file")
-          }
-          props
-        }
         // Pull all configs from the decoder.properties file
         var numPartitionsCheck = java.lang.Integer.valueOf(decoderConfig.getProperty("sample-data.consumer.partitions.peek"))
         val pollTimeout = java.lang.Long.valueOf(decoderConfig.getProperty("sample-data.consumer.poll.timeout"))
@@ -601,8 +591,20 @@ object ActorModel {
                       tpSizes: Option[Map[Int, Map[Int, Long]]],
                       clusterContext: ClusterContext, tdPrevious: Option[TopicDescription],
                       brokerList: BrokerList = null) : TopicIdentity = {
+      val decoderConfig: Properties = {
+        val filePath = Play.current.configuration.getString("sample-data.consumer.decoder.properties.file").getOrElse("conf/decoder.properties")
+        val file = new java.io.File(filePath)
+        val props = new Properties()
+        if(file.isFile & file.canRead) {
+          props.load(new java.io.FileInputStream(file))
+        } else {
+          logger.info(s"Failed to find decoder properties file or file is not readable : $file")
+        }
+        props
+      }
+      val sampleDataEnabled = Play.current.configuration.getBoolean("sample-data.enabled").getOrElse(false)
       val consumer : KafkaConsumer[Array[Byte], Array[Byte]] = {
-        if (brokerList == null) {
+        if (brokerList == null || sampleDataEnabled == false) {
           null
         } else {
           val props = new Properties
@@ -611,7 +613,7 @@ object ActorModel {
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.EXCLUDE_INTERNAL_TOPICS_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false")
           props.put(org.apache.kafka.clients.consumer.ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArrayDeserializer")
-          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, "kafka.manager.deserializer.JSONDeserializer")
+          props.put(org.apache.kafka.clients.consumer.ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, decoderConfig.getProperty("sample-data.consumer.deserializer"))
 
           var konsumer: KafkaConsumer[Array[Byte], Array[Byte]] = null
           try {
@@ -642,7 +644,7 @@ object ActorModel {
         }
       }
       val size = tpi.flatMap(_._2.leaderSize).reduceLeftOption{ _ + _ }.map(FormatMetric.sizeFormat(_))
-      TopicIdentity(td.topic,td.description._1,partMap.size,tpi,brokers,config._1,config._2.toList, clusterContext, tm, size, consumer)
+      TopicIdentity(td.topic,td.description._1,partMap.size,tpi,brokers,config._1,config._2.toList, clusterContext, tm, size, consumer, decoderConfig)
     }
 
     implicit def from(bl: BrokerList, td: TopicDescription, tm: Option[BrokerMetrics], tpSizes: Option[Map[Int, Map[Int, Long]]], clusterContext: ClusterContext, tdPrevious: Option[TopicDescription]) : TopicIdentity = {
